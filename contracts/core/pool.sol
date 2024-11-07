@@ -4,14 +4,16 @@ pragma solidity ^0.8.24;
 
 import "../helperContracts/ierc20.sol";
 import "../helperContracts/safemath.sol";
+import "../helperContracts/nonReentrant.sol";
 import "./erc20.sol";
 
-contract Pool {
+contract Pool is ReentrancyGuard {
 
     address[] public stakers;
-    address public legacy;
+    address public ubiContract;
     mapping(address => uint256) stakerAmount;
     mapping(address => bool) isStaker;
+    mapping(address => uint256) stakerIndex;
     // address public rewardTokenAddress;
     uint48 public drawPeriod; // time between each draw
     uint48 public firstDrawOpensAfter = 10;
@@ -47,10 +49,14 @@ contract Pool {
     event PoolCreated(address indexed poolAddress, address indexed poolCreator, uint256 indexed timestamp);
     event deposited(address indexed staker, uint256 amount);
     event withdraw(address indexed staker, uint256 amount);
+    event winnersSelected(address[] winners, uint256 timestamp);
+    event winnerRewardClaimed(address winner, uint256 amount);
+    event rewardToUBI(address indexed ubiContract, uint256 amount, uint256 indexed timestamp);
+    event tokenDeployed(address indexed tokenAddress, uint256 initialSupply);
 
     using SafeMath for *;
 
-    constructor(string memory tokenName, string memory tokenSymbol, uint48 _drawPeriod, uint16 _TPW) {
+    constructor(string memory tokenName, string memory tokenSymbol, uint48 _drawPeriod, uint16 _TPW, address _ubiContract) {
 
         if( _TPW == 0) revert("Tokens Per Week cant be zero");
         tokenDetails = TokenDetails({
@@ -63,6 +69,7 @@ contract Pool {
         _deployToken();
         drawPeriod = _drawPeriod;
         creationTime = block.timestamp;
+        ubiContract = _ubiContract;
         // firstDrawOpensAfter = _firstDrawOpensAfter;
         // grandPrizePeriodDraws = _grandPrizePeriodDraws;
         TPW = _TPW;
@@ -75,6 +82,7 @@ contract Pool {
         if(!isStaker[staker]) {
             stakers.push(staker);
             isStaker[staker] = true;
+            stakerIndex[staker] = stakers.length - 1;
         }
         stakerAmount[staker] = stakerAmount[staker].add(_amount);
         totalAmountStaked = totalAmountStaked.add(_amount);
@@ -86,12 +94,17 @@ contract Pool {
     function unStake() public {
         address staker = msg.sender;
         if(!isStaker[staker]) revert("you are not a staker");
-        uint256 un_stake = stakerAmount[staker];
+        uint256 amount = stakerAmount[staker];
+        address swapStaker = stakers[stakers.length - 1];
+        uint256 index = stakerIndex[staker]; 
+        stakers[stakerIndex[staker]] = stakers[stakers.length - 1];
+        stakers.pop();
+        stakerIndex[swapStaker] = index; 
         stakerAmount[staker] = 0;
         isStaker[staker] = false;
-        (bool sent, ) = staker.call{value: un_stake}("");
+        (bool sent, ) = staker.call{value: amount}("");
         require(sent, "failed to unstake");
-        emit withdraw(staker, un_stake);
+        emit withdraw(staker, amount);
     }
 
     function nextDrawIn() public view returns(uint256) {
@@ -112,7 +125,9 @@ contract Pool {
 
         winners.roundId++;
         winners.timestamp = block.timestamp;
+        emit winnersSelected(winners.winners, block.timestamp);
         return winners.winners;
+        
     }
 
     function claimRewards() public returns(uint256) {
@@ -124,19 +139,24 @@ contract Pool {
         if (_token.balanceOf(address(this)) < TPW) {
             ERC20MemeToken(tokenDetails.tokenAddress).mint(address(this), TPW * 100);
         }
-        uint256 rewardAmount = TPW / 3;
-        winners.winnerReward[staker] = rewardAmount;
-        _token.transfer(staker, rewardAmount);
+        uint256 amountToUBI = (TPW * 20) / 300;
+        uint256 amountToWinner = (TPW / 3) - amountToUBI;
+        _token.transfer(ubiContract, amountToUBI);
+        winners.winnerReward[staker] = amountToWinner;
+        _token.transfer(staker, amountToWinner);
         winners.isClaimed[staker] = true;
 
-        return rewardAmount;
+        emit rewardToUBI(ubiContract, amountToUBI, block.timestamp);
+        emit winnerRewardClaimed(staker, amountToWinner);
+        
+        return amountToWinner;
     }
 
     function myClaimableRewards() public view returns(bool claimable, uint256 amount) {
         address staker = msg.sender;
         require(!winners.isClaimed[staker], "winner already claimed");
         if(winners.isWinner[msg.sender]) {
-            return(true, TPW / 3);
+            return(true, (TPW * 80) / 300);
         } else {
             return(false, 0);
         }
@@ -151,6 +171,7 @@ contract Pool {
             tokenDetails.initialSupply
         );
         tokenDetails.tokenAddress = address(token);
+        emit tokenDeployed(tokenDetails.tokenAddress, tokenDetails.initialSupply);
     }
 
     receive() external payable {

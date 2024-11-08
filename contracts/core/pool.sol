@@ -11,9 +11,9 @@ contract Pool is ReentrancyGuard {
 
     address[] public stakers;
     address public ubiContract;
-    mapping(address => uint256) stakerAmount;
-    mapping(address => bool) isStaker;
-    mapping(address => uint256) stakerIndex;
+    mapping(address => uint256) public stakerAmount;
+    mapping(address => bool) public isStaker;
+    mapping(address => uint256) public stakerIndex;
     // address public rewardTokenAddress;
     uint48 public drawPeriod; // time between each draw
     uint48 public firstDrawOpensAfter = 10;
@@ -56,9 +56,15 @@ contract Pool is ReentrancyGuard {
 
     using SafeMath for *;
 
-    constructor(string memory tokenName, string memory tokenSymbol, uint48 _drawPeriod, uint16 _TPW, address _ubiContract) {
+    constructor(string memory tokenName, string memory tokenSymbol, uint48 _drawPeriod, uint256 _TPW, address _ubiContract) {
 
         if( _TPW == 0) revert("Tokens Per Week cant be zero");
+        drawPeriod = _drawPeriod;
+        creationTime = block.timestamp;
+        ubiContract = _ubiContract;
+        // firstDrawOpensAfter = _firstDrawOpensAfter;
+        // grandPrizePeriodDraws = _grandPrizePeriodDraws;
+        TPW = _TPW;
         tokenDetails = TokenDetails({
             name: tokenName,
             symbol: tokenSymbol,
@@ -67,12 +73,7 @@ contract Pool is ReentrancyGuard {
             tokenOwner: msg.sender
         });
         _deployToken();
-        drawPeriod = _drawPeriod;
-        creationTime = block.timestamp;
-        ubiContract = _ubiContract;
-        // firstDrawOpensAfter = _firstDrawOpensAfter;
-        // grandPrizePeriodDraws = _grandPrizePeriodDraws;
-        TPW = _TPW;
+        _token = IERC20Permit(tokenDetails.tokenAddress);
         isActive = true;
         emit PoolCreated(address(this), msg.sender, block.timestamp);
     }
@@ -86,15 +87,17 @@ contract Pool is ReentrancyGuard {
         }
         stakerAmount[staker] = stakerAmount[staker].add(_amount);
         totalAmountStaked = totalAmountStaked.add(_amount);
-        (bool sent, ) = address(this).call{value: _amount}("");
-        require(sent, "failed to stake ether");
+        // (bool sent, ) = address(this).call{value: _amount}("");
+        // require(sent, "failed to stake ether");
         emit deposited(staker, _amount);
     }
 
     function unStake() public {
         address staker = msg.sender;
+         uint256 amount = stakerAmount[staker];
         if(!isStaker[staker]) revert("you are not a staker");
-        uint256 amount = stakerAmount[staker];
+        require(amount > 0, "Nothing to unstake");
+        require(address(this).balance >= amount, "Contract has insufficient balance");
         address swapStaker = stakers[stakers.length - 1];
         uint256 index = stakerIndex[staker]; 
         stakers[stakerIndex[staker]] = stakers[stakers.length - 1];
@@ -108,16 +111,20 @@ contract Pool is ReentrancyGuard {
     }
 
     function nextDrawIn() public view returns(uint256) {
-        return (winners.timestamp * 7 days - block.timestamp);
+        return ((winners.timestamp * 1 minutes) - block.timestamp);
+    }
+
+    function balance() public view returns(uint256) {
+        return address(this).balance;
     }
 
     function selectWinners() public returns(address[] memory) {
-        require(block.timestamp >= creationTime * 10 days, "need to wait 10 days after creation");
-        require(stakers.length >= 3, "Not enough stakers to select winners");
-        require(block.timestamp >= winners.timestamp * 7 days, "you can only select winners once in a week");
+        require(block.timestamp >= creationTime + 2 * 1 minutes, "need to wait 10 days after creation");
+        require(stakers.length >= 2, "Not enough stakers to select winners");
+        require(block.timestamp >= winners.timestamp + 1 minutes, "you can only select winners once in a week");
         delete winners.winners;
 
-        for (uint i = 0; i < 3; i++) {
+        for (uint i = 0; i < 2; i++) {
             uint256 randomIndex = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, i))) % stakers.length;
             winners.winners.push(stakers[randomIndex]);
             winners.isWinner[stakers[randomIndex]] = true;

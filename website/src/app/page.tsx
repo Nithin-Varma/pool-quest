@@ -14,12 +14,12 @@ export default function LandingPage() {
   const app_id = process.env.NEXT_PUBLIC_WLD_APP_ID as `app_${string}`
   const action = process.env.NEXT_PUBLIC_WLD_ACTION
 
-  if (!app_id) {
-    throw new Error("app_id is not set in environment variables!")
-  }
-  if (!action) {
-    throw new Error("action is not set in environment variables!")
-  }
+  // if (!app_id) {
+  //   throw new Error("app_id is not set in environment variables!")
+  // }
+  // if (!action) {
+  //   throw new Error("action is not set in environment variables!")
+  // }
 
   const { setOpen } = useIDKit()
 
